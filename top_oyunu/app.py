@@ -1,9 +1,13 @@
 """
-Top Oyunu - Sadelestirilmis surum.
+Top Oyunu - Sadelestirilmis surum + eglenceli eklentiler.
 Kamerada bir top vardir; kafanla ve ellerinle topa vurarak sektirebilirsin.
 - Yer cekimi vardir, top dususe gecer.
 - Yuz tespiti ile kafa carpismasi yapilir.
 - Hareket maskesi ile el carpismasi yapilir (kameraya el sallayinca top sekiyor).
+- Ust uste vuruslar combo carpani verir, belirli skorda LEVEL UP olur.
+- Topun arkasinda renkli iz, vurulunca parcacik patlamalari.
+- F tusuyla yuze sapka / gozluk / biyik gibi eglenceli filtreler eklenir.
+- Ses efektleri (Windows winsound) acik/kapali yapilabilir.
 """
 
 from __future__ import annotations
@@ -17,6 +21,8 @@ from PIL import Image, ImageTk
 from ball_game import BallGame
 from camera_utils import list_available_cameras
 from face_detector import FaceDetector
+from face_filters import NUM_FILTERS, apply_filter, filter_name
+from sounds import SoundFx
 
 
 FRAME_W = 720
@@ -26,14 +32,17 @@ FRAME_H = 540
 class TopOyunuApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Top Oyunu")
-        self.root.geometry("900x620")
-        self.root.minsize(800, 560)
+        self.root.title("Top Oyunu - Eglenceli Surum")
+        self.root.geometry("960x680")
+        self.root.minsize(820, 600)
 
         self.cap: cv2.VideoCapture | None = None
         self.detector = FaceDetector()
-        self.game = BallGame(width=FRAME_W, height=FRAME_H)
+        self.sound = SoundFx(enabled=True)
+        self.game = BallGame(width=FRAME_W, height=FRAME_H, sound=self.sound)
         self.running = False
+        self.filter_index = 0
+        self.sound_enabled = tk.BooleanVar(value=True)
 
         self._build_ui()
         self._populate_cameras()
@@ -61,9 +70,23 @@ class TopOyunuApp:
         self.start_btn = ttk.Button(top, text="Baslat", command=self._toggle_run)
         self.start_btn.pack(side=tk.LEFT, padx=6)
 
-        ttk.Button(top, text="Yeni Oyun (Space)", command=self.game.reset).pack(
+        ttk.Button(top, text="Yeni Oyun (Space)", command=self._new_game).pack(
             side=tk.LEFT, padx=6
         )
+
+        self.filter_btn = ttk.Button(
+            top,
+            text=f"Filtre: {filter_name(self.filter_index)} (F)",
+            command=self._next_filter,
+        )
+        self.filter_btn.pack(side=tk.LEFT, padx=6)
+
+        ttk.Checkbutton(
+            top,
+            text="Ses",
+            variable=self.sound_enabled,
+            command=self._toggle_sound,
+        ).pack(side=tk.LEFT, padx=6)
 
         self.status_var = tk.StringVar(value="Hazir.")
         ttk.Label(top, textvariable=self.status_var, foreground="#555").pack(
@@ -77,8 +100,8 @@ class TopOyunuApp:
 
         tip = (
             "Kafanla topu kafala, ellerini sallayarak topa vur. "
-            "Top yere dusunce skor sifirlanir. "
-            "Tuslar: Space = yeni oyun, Q = cikis."
+            "Ust uste vuruslarda combo carpani buyur. "
+            "Tuslar: Space = yeni oyun, F = filtre degistir, S = sesi ac/kapa, Q = cikis."
         )
         ttk.Label(self.root, text=tip, foreground="#666").pack(pady=(0, 6))
 
@@ -111,6 +134,22 @@ class TopOyunuApp:
             self._stop()
         else:
             self._start()
+
+    def _new_game(self) -> None:
+        self.game.reset()
+        self.status_var.set("Yeni oyun!")
+
+    def _next_filter(self) -> None:
+        self.filter_index = (self.filter_index + 1) % NUM_FILTERS
+        name = filter_name(self.filter_index)
+        self.filter_btn.config(text=f"Filtre: {name} (F)")
+        self.status_var.set(f"Filtre: {name}")
+
+    def _toggle_sound(self) -> None:
+        self.sound.set_enabled(self.sound_enabled.get())
+        self.status_var.set(
+            "Ses acik." if self.sound_enabled.get() else "Ses kapali."
+        )
 
     def _start(self) -> None:
         idx = self._selected_camera_index()
@@ -153,6 +192,9 @@ class TopOyunuApp:
         face_boxes = self.detector.detect(frame)
         self.game.step(frame, face_boxes)
 
+        if self.filter_index > 0:
+            apply_filter(frame, face_boxes, self.filter_index)
+
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(rgb)
 
@@ -170,7 +212,12 @@ class TopOyunuApp:
         if ch == "q":
             self._on_close()
         elif ch == "space":
-            self.game.reset()
+            self._new_game()
+        elif ch == "f":
+            self._next_filter()
+        elif ch == "s":
+            self.sound_enabled.set(not self.sound_enabled.get())
+            self._toggle_sound()
 
     def _on_close(self) -> None:
         self._stop()
